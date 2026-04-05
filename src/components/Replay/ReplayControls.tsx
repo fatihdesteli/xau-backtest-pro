@@ -202,6 +202,28 @@ export default function ReplayControls() {
         </span>
       </div>
 
+      {/* Random jump */}
+      <button
+        onClick={() => {
+          if (total < 200) return;
+          stopReplay();
+          // Pick a random start point, leaving at least 200 bars to play forward
+          const min = Math.floor(total * 0.05); // skip first 5%
+          const max = total - 201;
+          const rand = min + Math.floor(Math.random() * (max - min));
+          setCurrentBarIndex(rand);
+        }}
+        disabled={total < 200}
+        title="Rastgele başlangıç noktası"
+        className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 border border-purple-600/20 hover:border-purple-500/40 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        Random
+      </button>
+
       {/* Jump to start/end */}
       <button
         onClick={() => { stopReplay(); setCurrentBarIndex(0); }}
