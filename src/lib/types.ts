@@ -11,7 +11,7 @@ export interface OHLCVCandle {
 
 // ─── Timeframes ───────────────────────────────────────────────────────────────
 
-export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1D";
+export type Timeframe = "5m" | "15m" | "30m" | "4h" | "1D";
 
 export interface TimeframeConfig {
   label: string;

@@ -50,6 +50,9 @@ export default function DashboardPage() {
   const [drawingColor, setDrawingColor] = useState("#3b82f6");
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
+  // Tracks current candle's timestamp so we can resync after TF switch
+  const currentTimestampRef = useRef<number | null>(null);
+
   // ── Trade close animation ─────────────────────────────────────────────────
   const [toastResult, setToastResult] = useState<TradeResult | null>(null);
   const prevTradesRef = useRef<Trade[]>([]);
@@ -68,8 +71,8 @@ export default function DashboardPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Load candle data ────────────────────────────────────────────────────────
-  const loadData = useCallback(async (tf: Timeframe) => {
+  // ── Load candle data — syncs position by timestamp across TF switches ────────
+  const loadData = useCallback(async (tf: Timeframe, anchorTimestamp?: number) => {
     setIsLoadingData(true);
     setDataError(null);
     try {
@@ -78,7 +81,26 @@ export default function DashboardPage() {
       if (!res.ok) throw new Error(`Veri yüklenemedi: ${cfg.dataFile}`);
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) throw new Error("Veri boş");
+
+      // Find the bar closest to anchorTimestamp (if provided)
+      let targetIndex = Math.min(200, data.length - 1); // default start
+      if (anchorTimestamp != null) {
+        // Binary-search closest bar ≤ anchorTimestamp
+        let lo = 0, hi = data.length - 1, best = 0;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (data[mid].time <= anchorTimestamp) { best = mid; lo = mid + 1; }
+          else hi = mid - 1;
+        }
+        targetIndex = best;
+      }
+
+      // setCandles sets currentBarIndex to 200 by default — we override below
       setCandles(data);
+      // Use setTimeout so store state settles first
+      setTimeout(() => {
+        useBacktestStore.getState().setCurrentBarIndex(targetIndex);
+      }, 0);
     } catch (err) {
       setDataError(err instanceof Error ? err.message : "Bilinmeyen hata");
     } finally {
@@ -86,9 +108,23 @@ export default function DashboardPage() {
     }
   }, [setCandles]);
 
+  // Track current timestamp whenever bar changes
+  useEffect(() => {
+    const candle = candles[currentBarIndex];
+    if (candle) currentTimestampRef.current = candle.time;
+  }, [candles, currentBarIndex]);
+
+  // On TF change: pass current timestamp so we land at the same moment
+  const handleTimeframeChange = useCallback((tf: Timeframe) => {
+    setCurrentTimeframe(tf);
+    loadData(tf, currentTimestampRef.current ?? undefined);
+  }, [loadData]);
+
+  // Initial load
   useEffect(() => {
     loadData(currentTimeframe);
-  }, [currentTimeframe, loadData]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Auto-close trades on TP/SL hit + detect new closes ─────────────────────
   useEffect(() => {
@@ -152,7 +188,7 @@ export default function DashboardPage() {
 
       {/* Top Bar */}
       <TopBar
-        onTimeframeChange={setCurrentTimeframe}
+        onTimeframeChange={handleTimeframeChange}
         currentTimeframe={currentTimeframe}
       />
 
