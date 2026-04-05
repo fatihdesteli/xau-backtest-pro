@@ -1,6 +1,5 @@
 {
   "symbol": "XAUUSD",
-  "source": "Generated sample data (replace with real data via scripts/download_data.py)",
-  "generated_at": "2026-04-05T08:54:59.860Z",
-  "note": "Run 'python scripts/download_data.py' to replace with real Yahoo Finance data"
+  "source": "Sample data — run python scripts/download_data.py for real data",
+  "generated_at": "2026-04-05T09:28:03.853Z"
 }

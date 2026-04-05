@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * Generates realistic XAUUSD sample data for all timeframes.
- * Simulates price around 2000-2400 range with realistic volatility.
- *
- * Run: node scripts/generate_sample_data.js
+ * Generates realistic XAUUSD-like candlestick data.
+ * Candles look like real gold charts: small bodies, proportional wicks,
+ * occasional rejection/spike candles, proper trending structure.
  */
 
 const fs = require("fs");
@@ -11,52 +10,75 @@ const path = require("path");
 
 const OUTPUT_DIR = path.join(__dirname, "../public/data");
 
-// ─── Realistic XAUUSD random walk ─────────────────────────────────────────────
-function generateCandles(
-  count,
-  intervalSeconds,
-  startTime,
-  startPrice = 2050,
-  volatilityPct = 0.0008
-) {
+function generateCandles(count, intervalSeconds, startTime, startPrice = 2050, volBase = 0.0006) {
   const candles = [];
   let price = startPrice;
   let time = startTime;
 
-  // Trending component
   let trendBias = 0;
-  let trendTimer = 0;
+  let trendLen = 0;
+  let trendCount = 0;
+
+  // Slow drift component (longer cycles)
+  let driftAngle = 0;
 
   for (let i = 0; i < count; i++) {
-    // Update trend every N candles
-    if (trendTimer <= 0) {
-      trendBias = (Math.random() - 0.48) * 0.0002;
-      trendTimer = 10 + Math.floor(Math.random() * 40);
+    // Change trend direction periodically
+    if (trendCount <= 0) {
+      trendBias = (Math.random() - 0.5) * 0.0003;
+      trendLen = 15 + Math.floor(Math.random() * 60);
+      trendCount = trendLen;
     }
-    trendTimer--;
+    trendCount--;
 
-    const vol = price * volatilityPct;
-    const body = (Math.random() - 0.5 + trendBias) * vol * 2;
+    // Slow drift (sinusoidal)
+    driftAngle += 0.005 + Math.random() * 0.003;
+    const drift = Math.sin(driftAngle) * price * 0.00005;
+
+    const vol = price * volBase;
+
+    // Body: small-medium size, biased by trend
+    const bodyFactor = 0.3 + Math.random() * 0.7; // 30-100% of vol
+    const bodyDir = Math.random() < (0.5 + trendBias * 500) ? 1 : -1;
+    const bodySize = bodyFactor * vol * bodyDir + drift;
+
     const open = price;
-    const close = price + body;
-    const wick = vol * (0.5 + Math.random() * 1.5);
+    const close = price + bodySize;
 
-    const high = Math.max(open, close) + Math.abs(Math.random() * wick);
-    const low = Math.min(open, close) - Math.abs(Math.random() * wick);
+    // Wicks: proportional to body with small baseline
+    const bodyRange = Math.abs(close - open);
+    const wickBase = vol * 0.08; // small baseline wick
+
+    // Upper wick: short on bullish candles, longer on bearish (rejection)
+    const upperWick = wickBase + bodyRange * (0.05 + Math.random() * 0.25);
+    // Lower wick: short on bearish candles, longer on bullish
+    const lowerWick = wickBase + bodyRange * (0.05 + Math.random() * 0.25);
+
+    // Occasional spike/rejection candle (3% chance)
+    const isSpiked = Math.random() < 0.03;
+    const spikeMultiplier = isSpiked ? (2 + Math.random() * 3) : 1;
+
+    const high = Math.max(open, close) + upperWick * spikeMultiplier;
+    const low = Math.min(open, close) - lowerWick * spikeMultiplier;
+
+    // Volume: higher on bigger moves
+    const moveSize = Math.abs(bodySize) / vol;
+    const volume = Math.floor(800 + moveSize * 3000 + Math.random() * 2000);
 
     candles.push({
       time,
-      open: Math.round(open * 100) / 100,
-      high: Math.round(high * 100) / 100,
-      low: Math.round(low * 100) / 100,
-      close: Math.round(close * 100) / 100,
-      volume: Math.floor(1000 + Math.random() * 9000),
+      open: round2(open),
+      high: round2(high),
+      low: round2(low),
+      close: round2(close),
+      volume,
     });
 
     price = close;
-    // Keep price in realistic range
-    if (price < 1800) price = 1800 + Math.random() * 50;
-    if (price > 2600) price = 2600 - Math.random() * 50;
+
+    // Soft price boundary (not hard reset)
+    if (price < 1850) { trendBias = Math.abs(trendBias) + 0.0002; }
+    if (price > 2550) { trendBias = -Math.abs(trendBias) - 0.0002; }
 
     time += intervalSeconds;
   }
@@ -64,31 +86,31 @@ function generateCandles(
   return candles;
 }
 
-// ─── Config ───────────────────────────────────────────────────────────────────
+function round2(v) {
+  return Math.round(v * 100) / 100;
+}
+
+// ─── Timeframe configs ───────────────────────────────────────────────────────
 const now = Math.floor(Date.now() / 1000);
-const tradingHourSeconds = 3600;
 
 const TIMEFRAMES = [
-  { key: "1m",  file: "xauusd_1m.json",  interval: 60,    count: 10080, volatility: 0.00025 },
-  { key: "5m",  file: "xauusd_5m.json",  interval: 300,   count: 8640,  volatility: 0.0004  },
-  { key: "15m", file: "xauusd_15m.json", interval: 900,   count: 5760,  volatility: 0.0006  },
-  { key: "1h",  file: "xauusd_1h.json",  interval: 3600,  count: 4380,  volatility: 0.001   },
-  { key: "4h",  file: "xauusd_4h.json",  interval: 14400, count: 2000,  volatility: 0.0018  },
-  { key: "1D",  file: "xauusd_1d.json",  interval: 86400, count: 1000,  volatility: 0.0025  },
+  { key: "1m",  file: "xauusd_1m.json",  interval: 60,    count: 10080, vol: 0.00018 },
+  { key: "5m",  file: "xauusd_5m.json",  interval: 300,   count: 8640,  vol: 0.00032 },
+  { key: "15m", file: "xauusd_15m.json", interval: 900,   count: 5760,  vol: 0.00048 },
+  { key: "1h",  file: "xauusd_1h.json",  interval: 3600,  count: 4380,  vol: 0.00085 },
+  { key: "4h",  file: "xauusd_4h.json",  interval: 14400, count: 2000,  vol: 0.0015  },
+  { key: "1D",  file: "xauusd_1d.json",  interval: 86400, count: 1000,  vol: 0.0022  },
 ];
 
-// ─── Generate & Save ──────────────────────────────────────────────────────────
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+console.log("🔸 Generating XAUUSD candle data...\n");
 
-console.log("🔸 Generating XAUUSD sample data...\n");
+// Use shared price so timeframes are consistent (roughly)
+let basePrice = 2200;
 
-let basePrice = 2050;
-
-TIMEFRAMES.forEach(({ key, file, interval, count, volatility }) => {
+TIMEFRAMES.forEach(({ key, file, interval, count, vol }) => {
   const startTime = now - count * interval;
-  const candles = generateCandles(count, interval, startTime, basePrice, volatility);
-
-  // Keep price continuity across timeframes (roughly)
+  const candles = generateCandles(count, interval, startTime, basePrice, vol);
   basePrice = candles[candles.length - 1].close;
 
   const outPath = path.join(OUTPUT_DIR, file);
@@ -98,14 +120,13 @@ TIMEFRAMES.forEach(({ key, file, interval, count, volatility }) => {
   console.log(`  ✓ ${key.padEnd(4)} — ${count} candles → ${file} (${sizeKb} KB)`);
 });
 
-// Manifest
-const manifest = {
-  symbol: "XAUUSD",
-  source: "Generated sample data (replace with real data via scripts/download_data.py)",
-  generated_at: new Date().toISOString(),
-  note: "Run 'python scripts/download_data.py' to replace with real Yahoo Finance data",
-};
-fs.writeFileSync(path.join(OUTPUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2));
+fs.writeFileSync(
+  path.join(OUTPUT_DIR, "manifest.json"),
+  JSON.stringify({
+    symbol: "XAUUSD",
+    source: "Sample data — run python scripts/download_data.py for real data",
+    generated_at: new Date().toISOString(),
+  }, null, 2)
+);
 
-console.log("\n✅ Sample data generated!");
-console.log("   Run 'python scripts/download_data.py' for real historical data.\n");
+console.log("\n✅ Done!\n");

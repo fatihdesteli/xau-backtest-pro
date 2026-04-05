@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useBacktestStore } from "@/lib/store";
 import { AUTH_KEY, TIMEFRAME_CONFIG } from "@/lib/constants";
-import type { Timeframe } from "@/lib/types";
+import type { Timeframe, Trade, CloseReason } from "@/lib/types";
 
 import TopBar from "@/components/UI/TopBar";
 import BacktestChart, { type BacktestChartHandle } from "@/components/Chart/BacktestChart";
@@ -13,21 +13,32 @@ import DrawingToolbar from "@/components/Chart/DrawingToolbar";
 import ReplayControls from "@/components/Replay/ReplayControls";
 import TradePanel from "@/components/Trade/TradePanel";
 import StatsPanel from "@/components/Stats/StatsPanel";
+import TradeCloseToast from "@/components/UI/TradeCloseToast";
 
 type PanelTab = "trade" | "stats";
+
+interface TradeResult {
+  pnl: number;
+  pips: number;
+  rMultiple: number | null;
+  direction: "long" | "short";
+  closeReason: CloseReason;
+  entryPrice: number;
+  exitPrice: number;
+  lotSize: number;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
   const chartRef = useRef<BacktestChartHandle>(null);
 
-  const setCandles = useBacktestStore((s) => s.setCandles);
-  const session = useBacktestStore((s) => s.session);
-  const createSession = useBacktestStore((s) => s.createSession);
-  const candles = useBacktestStore((s) => s.candles);
+  const setCandles      = useBacktestStore((s) => s.setCandles);
+  const session         = useBacktestStore((s) => s.session);
+  const createSession   = useBacktestStore((s) => s.createSession);
+  const candles         = useBacktestStore((s) => s.candles);
   const currentBarIndex = useBacktestStore((s) => s.currentBarIndex);
-  const trades = useBacktestStore((s) => s.trades);
-  const closeTrade = useBacktestStore((s) => s.closeTrade);
-  const setActiveTool = useBacktestStore((s) => s.setActiveTool);
+  const trades          = useBacktestStore((s) => s.trades);
+  const closeTrade      = useBacktestStore((s) => s.closeTrade);
 
   const [currentTimeframe, setCurrentTimeframe] = useState<Timeframe>(
     (session?.timeframe as Timeframe) ?? "15m"
@@ -39,6 +50,10 @@ export default function DashboardPage() {
   const [drawingColor, setDrawingColor] = useState("#3b82f6");
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
+  // ── Trade close animation ─────────────────────────────────────────────────
+  const [toastResult, setToastResult] = useState<TradeResult | null>(null);
+  const prevTradesRef = useRef<Trade[]>([]);
+
   // ── Auth check ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (typeof window !== "undefined" && !sessionStorage.getItem(AUTH_KEY)) {
@@ -46,14 +61,14 @@ export default function DashboardPage() {
     }
   }, [router]);
 
-  // ── Init session on first load ──────────────────────────────────────────────
+  // ── Init session ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) {
       createSession("İlk Backtest", "XAUUSD", currentTimeframe);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Load candle data when timeframe changes ─────────────────────────────────
+  // ── Load candle data ────────────────────────────────────────────────────────
   const loadData = useCallback(async (tf: Timeframe) => {
     setIsLoadingData(true);
     setDataError(null);
@@ -62,9 +77,7 @@ export default function DashboardPage() {
       const res = await fetch(`/data/${cfg.dataFile}`);
       if (!res.ok) throw new Error(`Veri yüklenemedi: ${cfg.dataFile}`);
       const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new Error("Veri boş veya geçersiz format");
-      }
+      if (!Array.isArray(data) || data.length === 0) throw new Error("Veri boş");
       setCandles(data);
     } catch (err) {
       setDataError(err instanceof Error ? err.message : "Bilinmeyen hata");
@@ -77,59 +90,76 @@ export default function DashboardPage() {
     loadData(currentTimeframe);
   }, [currentTimeframe, loadData]);
 
-  // ── Auto-close trades at TP/SL on each bar advance ─────────────────────────
+  // ── Auto-close trades on TP/SL hit + detect new closes ─────────────────────
   useEffect(() => {
     const candle = candles[currentBarIndex];
     if (!candle) return;
 
     const openTrades = trades.filter((t) => t.status === "open");
     openTrades.forEach((trade) => {
-      // Check SL hit
       if (trade.stopLoss !== null) {
         const slHit = trade.direction === "long"
-          ? candle.low <= trade.stopLoss
+          ? candle.low  <= trade.stopLoss
           : candle.high >= trade.stopLoss;
-        if (slHit) {
-          closeTrade(trade.id, trade.stopLoss, "sl");
-          return;
-        }
+        if (slHit) { closeTrade(trade.id, trade.stopLoss, "sl"); return; }
       }
-      // Check TP hit
       if (trade.takeProfit !== null) {
         const tpHit = trade.direction === "long"
           ? candle.high >= trade.takeProfit
-          : candle.low <= trade.takeProfit;
-        if (tpHit) {
-          closeTrade(trade.id, trade.takeProfit, "tp");
-          return;
-        }
+          : candle.low  <= trade.takeProfit;
+        if (tpHit) { closeTrade(trade.id, trade.takeProfit, "tp"); return; }
       }
     });
-  }, [currentBarIndex, candles, trades, closeTrade]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentBarIndex, candles]);
 
-  const handleTimeframeChange = (tf: Timeframe) => {
-    setCurrentTimeframe(tf);
-  };
+  // ── Detect newly closed trades → show animation ────────────────────────────
+  useEffect(() => {
+    const prev = prevTradesRef.current;
+    const curr = trades;
 
-  const handleChartClick = useCallback((time: number, price: number, x: number, y: number) => {
-    // Drawing tool handling is done inside BacktestChart via chart events
-    // This callback can be used for future interactions
-  }, []);
+    // Find trades that just changed from open → closed
+    for (const t of curr) {
+      if (t.status !== "closed") continue;
+      const wasOpen = prev.find((p) => p.id === t.id && p.status === "open");
+      if (wasOpen && t.pnl !== null && t.exitPrice !== null && t.closeReason !== null) {
+        setToastResult({
+          pnl:         t.pnl,
+          pips:        t.pips ?? 0,
+          rMultiple:   t.rMultiple,
+          direction:   t.direction,
+          closeReason: t.closeReason,
+          entryPrice:  t.entryPrice,
+          exitPrice:   t.exitPrice,
+          lotSize:     t.lotSize,
+        });
+        break; // show one at a time
+      }
+    }
+
+    prevTradesRef.current = curr;
+  }, [trades]);
 
   const currentPrice = candles[currentBarIndex]?.close ?? null;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Top Navigation Bar */}
+      {/* Trade close animation overlay */}
+      <TradeCloseToast
+        result={toastResult}
+        onDone={() => setToastResult(null)}
+      />
+
+      {/* Top Bar */}
       <TopBar
-        onTimeframeChange={handleTimeframeChange}
+        onTimeframeChange={setCurrentTimeframe}
         currentTimeframe={currentTimeframe}
       />
 
-      {/* Main content area */}
+      {/* Main content */}
       <div className="flex flex-1 overflow-hidden min-h-0">
 
-        {/* Drawing Toolbar (left sidebar) */}
+        {/* Drawing Toolbar */}
         <div className="w-10 bg-[#111] border-r border-[#1e2028] flex flex-col items-center shrink-0">
           <DrawingToolbar
             activeColor={drawingColor}
@@ -137,12 +167,10 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Chart area */}
+        {/* Chart column */}
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-          {/* OHLC info bar */}
           <PriceInfoBar crosshairPrice={crosshairPrice} />
 
-          {/* Chart */}
           <div className="flex-1 relative min-h-0">
             {isLoadingData && (
               <div className="absolute inset-0 flex items-center justify-center bg-[#0d0d0d] z-20">
@@ -162,13 +190,10 @@ export default function DashboardPage() {
                   <div>
                     <p className="text-sm text-red-400 font-medium mb-1">Veri yüklenemedi</p>
                     <p className="text-xs text-gray-500">{dataError}</p>
-                    <p className="text-xs text-gray-600 mt-2">
-                      Lütfen: <code className="bg-gray-800 px-1 rounded">node scripts/generate_sample_data.js</code> çalıştırın
-                    </p>
                   </div>
                   <button
                     onClick={() => loadData(currentTimeframe)}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white transition-colors"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white"
                   >
                     Tekrar Dene
                   </button>
@@ -179,20 +204,17 @@ export default function DashboardPage() {
               <BacktestChart
                 ref={chartRef}
                 onCrosshairPrice={setCrosshairPrice}
-                onChartClick={handleChartClick}
               />
             )}
           </div>
 
-          {/* Replay Controls */}
           <ReplayControls />
         </div>
 
-        {/* Right Panel toggle button */}
+        {/* Right panel toggle */}
         <button
           onClick={() => setRightPanelOpen((v) => !v)}
           className="w-4 bg-[#111] border-l border-[#1e2028] flex items-center justify-center hover:bg-white/5 transition-colors shrink-0"
-          title={rightPanelOpen ? "Paneli Gizle" : "Paneli Göster"}
         >
           <svg
             className={`w-3 h-3 text-gray-600 transition-transform ${rightPanelOpen ? "" : "rotate-180"}`}
@@ -202,10 +224,9 @@ export default function DashboardPage() {
           </svg>
         </button>
 
-        {/* Right sidebar (trade panel + stats) */}
+        {/* Right sidebar */}
         {rightPanelOpen && (
           <div className="w-72 flex flex-col bg-[#111] border-l border-[#1e2028] shrink-0 overflow-hidden">
-            {/* Tab header */}
             <div className="flex border-b border-[#1e2028] shrink-0">
               <button
                 onClick={() => setActiveTab("trade")}
@@ -242,13 +263,9 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            {/* Panel content */}
             <div className="flex-1 overflow-hidden min-h-0">
               {activeTab === "trade" ? (
-                <TradePanel
-                  currentPrice={currentPrice}
-                  onTradeOpened={() => setActiveTab("trade")}
-                />
+                <TradePanel currentPrice={currentPrice} />
               ) : (
                 <StatsPanel />
               )}

@@ -140,7 +140,12 @@ export default function DrawingToolbar({ onColorChange, activeColor = "#3b82f6" 
             {DRAWING_COLORS.map((c) => (
               <button
                 key={c}
-                onClick={() => { onColorChange?.(c); setShowColors(false); }}
+                onClick={() => {
+                  onColorChange?.(c);
+                  // Notify chart overlay of color change
+                  window.dispatchEvent(new CustomEvent("drawingColorChange", { detail: c }));
+                  setShowColors(false);
+                }}
                 className="w-6 h-6 rounded-full border-2 transition-transform hover:scale-110"
                 style={{
                   background: c,
