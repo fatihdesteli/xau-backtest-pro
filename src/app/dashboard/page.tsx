@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useBacktestStore } from "@/lib/store";
-import { AUTH_KEY, TIMEFRAME_CONFIG } from "@/lib/constants";
+import { AUTH_KEY } from "@/lib/constants";
 import type { Timeframe, Trade, CloseReason } from "@/lib/types";
 
 import TopBar from "@/components/UI/TopBar";
@@ -76,9 +76,8 @@ export default function DashboardPage() {
     setIsLoadingData(true);
     setDataError(null);
     try {
-      const cfg = TIMEFRAME_CONFIG[tf];
-      const res = await fetch(`/data/${cfg.dataFile}`);
-      if (!res.ok) throw new Error(`Veri yüklenemedi: ${cfg.dataFile}`);
+      const res = await fetch(`/api/candles/${tf}`);
+      if (!res.ok) throw new Error(`Veri yüklenemedi (${tf})`);
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) throw new Error("Veri boş");
 
