@@ -10,6 +10,7 @@ import {
 import {
   createChart,
   CandlestickSeries,
+  LineSeries,
   type IChartApi,
   type ISeriesApi,
   type CandlestickSeriesOptions,
@@ -43,6 +44,8 @@ const BacktestChart = forwardRef<BacktestChartHandle, Props>(
     const drawDivRef   = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
+    const ema9Ref      = useRef<ISeriesApi<"Line"> | null>(null);
+    const ema21Ref     = useRef<ISeriesApi<"Line"> | null>(null);
     const rafRef       = useRef<number | null>(null);
 
     // TP/SL handle DOM refs — updated imperatively in RAF loop
@@ -277,8 +280,21 @@ const BacktestChart = forwardRef<BacktestChartHandle, Props>(
         wickUpColor: CHART_COLORS.bullBorder, wickDownColor: CHART_COLORS.bearBorder,
       } as Partial<CandlestickSeriesOptions>);
 
+      const ema9 = chart.addSeries(LineSeries, {
+        color: "#f59e0b", lineWidth: 1,
+        priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+        title: "EMA9",
+      });
+      const ema21 = chart.addSeries(LineSeries, {
+        color: "#a855f7", lineWidth: 1,
+        priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+        title: "EMA21",
+      });
+
       chartRef.current = chart;
       seriesRef.current = series;
+      ema9Ref.current   = ema9;
+      ema21Ref.current  = ema21;
 
       chart.subscribeCrosshairMove((param) => {
         if (!onCrosshairPrice) return;
@@ -293,7 +309,7 @@ const BacktestChart = forwardRef<BacktestChartHandle, Props>(
       });
       ro.observe(containerRef.current);
 
-      return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+      return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; ema9Ref.current = null; ema21Ref.current = null; };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -309,13 +325,16 @@ const BacktestChart = forwardRef<BacktestChartHandle, Props>(
     }, []);
     useEffect(() => { syncCanvasSize(); }, [syncCanvasSize]);
 
-    // ── Feed candle data ──────────────────────────────────────────────────────
+    // ── Feed candle data + EMAs ───────────────────────────────────────────────
     useEffect(() => {
       const s = seriesRef.current;
       if (!s || candles.length === 0) return;
-      s.setData(candles.slice(0, currentBarIndex + 1).map((c) => ({
+      const visible = candles.slice(0, currentBarIndex + 1);
+      s.setData(visible.map((c) => ({
         time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
       })));
+      if (ema9Ref.current)  ema9Ref.current.setData(calcEMA(visible, 9));
+      if (ema21Ref.current) ema21Ref.current.setData(calcEMA(visible, 21));
       chartRef.current?.timeScale().scrollToPosition(10, false);
     }, [candles, currentBarIndex]);
 
@@ -450,6 +469,23 @@ const BacktestChart = forwardRef<BacktestChartHandle, Props>(
 
 BacktestChart.displayName = "BacktestChart";
 export default BacktestChart;
+
+function calcEMA(candles: { time: number; close: number }[], period: number) {
+  const k = 2 / (period + 1);
+  const out: { time: Time; value: number }[] = [];
+  let prev = 0;
+  for (let i = 0; i < candles.length; i++) {
+    if (i < period - 1) continue;
+    if (i === period - 1) {
+      prev = candles.slice(0, period).reduce((s, c) => s + c.close, 0) / period;
+      out.push({ time: candles[i].time as Time, value: prev });
+    } else {
+      prev = candles[i].close * k + prev * (1 - k);
+      out.push({ time: candles[i].time as Time, value: prev });
+    }
+  }
+  return out;
+}
 
 function hexToRgb(hex: string) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);

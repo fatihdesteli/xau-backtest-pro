@@ -76,7 +76,9 @@ export default function DashboardPage() {
     setIsLoadingData(true);
     setDataError(null);
     try {
-      const res = await fetch(`/api/candles/${tf}`);
+      // 1m and 5m are served from static JSON (user-provided broker data, ~100k bars)
+      const url = (tf === "1m" || tf === "5m") ? `/data/xauusd_${tf}.json` : `/api/candles/${tf}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`Veri yüklenemedi (${tf})`);
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) throw new Error("Veri boş");

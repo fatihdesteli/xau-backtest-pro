@@ -17,9 +17,10 @@ export const INSTRUMENT_CONFIG: Record<string, { label: string; pipValue: number
 };
 
 // ─── Timeframes ───────────────────────────────────────────────────────────────
-export const TIMEFRAMES: Timeframe[] = ["5m", "15m", "30m", "4h", "1D"];
+export const TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "30m", "4h", "1D"];
 
 export const TIMEFRAME_CONFIG: Record<Timeframe, TimeframeConfig> = {
+  "1m":  { label: "1M",  seconds: 60,    dataFile: "xauusd_1m.json"  },
   "5m":  { label: "5M",  seconds: 300,   dataFile: "xauusd_5m.json"  },
   "15m": { label: "15M", seconds: 900,   dataFile: "xauusd_15m.json" },
   "30m": { label: "30M", seconds: 1800,  dataFile: "xauusd_30m.json" },
